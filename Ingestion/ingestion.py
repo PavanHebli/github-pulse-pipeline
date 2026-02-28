@@ -31,6 +31,45 @@ s3_client = boto3.client("s3")
 # ==============================
 # Fetch GitHub Events
 # ==============================
+def fetch_repo_metadata(repo_url):
+    headers = {}
+
+    if GITHUB_TOKEN:
+        headers["Authorization"] = f"Bearer {GITHUB_TOKEN}"
+
+    try:
+        response = requests.get(repo_url, headers=headers, timeout=10)
+
+        if response.status_code == 200:
+            repo_data = response.json()
+
+            # Basic metadata
+            language = repo_data.get("language")
+            stars = repo_data.get("stargazers_count")
+            forks = repo_data.get("forks_count")
+
+            # Fetch detailed language breakdown
+            languages_url = repo_data.get("languages_url")
+            languages_breakdown = {}
+
+            if languages_url:
+                lang_response = requests.get(languages_url, headers=headers, timeout=10)
+                if lang_response.status_code == 200:
+                    languages_breakdown = lang_response.json()
+
+            return {
+                "primary_language": language,
+                "stars": stars,
+                "forks": forks,
+                "language_bytes": languages_breakdown
+            }
+
+        else:
+            return None
+
+    except Exception as e:
+        logger.error(f"Failed to fetch repo metadata: {str(e)}")
+        return None
 
 def fetch_github_events():
     headers = {}
@@ -42,17 +81,24 @@ def fetch_github_events():
         response = requests.get(GITHUB_API_URL, headers=headers, timeout=10)
 
         if response.status_code == 200:
-            remaining = response.headers.get("X-RateLimit-Remaining")
-            logger.info(f"GitHub API call successful. Remaining rate limit: {remaining}")
-            return response.json()
+            events = response.json()
 
-        elif response.status_code == 403:
-            logger.warning("Rate limit exceeded. Sleeping...")
-            time.sleep(60)
-            return []
+            enriched_events = []
+
+            for event in events:
+                repo_url = event.get("repo", {}).get("url")
+
+                if repo_url:
+                    metadata = fetch_repo_metadata(repo_url)
+
+                    if metadata:
+                        event["repo_metadata"] = metadata
+
+                enriched_events.append(event)
+
+            return enriched_events
 
         else:
-            logger.error(f"Unexpected status code: {response.status_code}")
             return []
 
     except requests.RequestException as e:
@@ -87,35 +133,35 @@ def write_to_s3(events):
         logger.error(f"Failed to upload to S3: {str(e)}")
 
 
-def lambda_handler(event, context):
-    events = fetch_github_events()
-    write_to_s3(events)
+# def lambda_handler(event, context):
+#     events = fetch_github_events()
+#     write_to_s3(events)
 
-    return {
-        "statusCode": 200,
-        "body": json.dumps({"events_written": len(events)})
-    }
+#     return {
+#         "statusCode": 200,
+#         "body": json.dumps({"events_written": len(events)})
+#     }
 
 # ==============================
 # Main Loop (Runs Forever)
 # comment 'lambda_handler' above for and uncomment this code to test locally.
 # ==============================
 
-# def run():
-#     logger.info("Starting GitHub ingestion service...")
+def run():
+    logger.info("Starting GitHub ingestion service...")
 
-#     while True:
-#         start_time = time.time()
+    while True:
+        start_time = time.time()
 
-#         events = fetch_github_events()
-#         write_to_s3(events)
+        events = fetch_github_events()
+        write_to_s3(events)
 
-#         elapsed = time.time() - start_time
-#         sleep_time = max(0, POLL_INTERVAL - elapsed)
+        elapsed = time.time() - start_time
+        sleep_time = max(0, POLL_INTERVAL - elapsed)
 
-#         time.sleep(sleep_time)
+        time.sleep(sleep_time)
 
 
-# if __name__ == "__main__":
-#     run()
+if __name__ == "__main__":
+    run()
 

@@ -1,0 +1,11 @@
+# Ignore everything
+*
+
+# Allow folders (so git can traverse)
+!*/
+
+# Allow specific file
+!Ingestion/ingestion.py
+
+# Allow .gitignore
+!.gitignore
